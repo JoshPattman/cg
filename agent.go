@@ -14,7 +14,11 @@ type Event interface {
 // A plugin can be loaded all-or-nothing, so if one tool fails none will be added.
 // A plugin may also have an event channel (can be nil) that will be forwarded to the agent.
 type Plugin interface {
+	// Get the unique name of this plugin.
 	Name() string
+	// Is this plugin internal / required by the agent to function? Internal plugins cannot be removed.
+	// Internal plugins will also not be removed when calling RemoveAllPlugins. and their cleanup method will neveer be called.
+	Internal() bool
 	// Load the plugin, returning tools, a channel of events, a function to call to cleanup the plugin, and an error if the plugin failed to load.
 	Load() ([]Tool, <-chan Event, func(), error)
 }

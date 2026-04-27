@@ -28,3 +28,7 @@ func (r runnerPlugin) Load() ([]cg.Tool, <-chan cg.Event, func(), error) {
 func (r runnerPlugin) Name() string {
 	return "internal"
 }
+
+func (r runnerPlugin) Internal() bool {
+	return true
+}

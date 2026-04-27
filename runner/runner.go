@@ -40,6 +40,7 @@ type agentRunner struct {
 
 type loadedPlugin struct {
 	name     string
+	internal bool
 	tools    []cg.Tool
 	events   <-chan cg.Event
 	shutdown func()
@@ -58,7 +59,7 @@ func (a *agentRunner) AddPlugin(p cg.Plugin) {
 	} else {
 		a.logger.Info("loaded plugin", "plugin", p.Name(), "num_tools", len(tools))
 	}
-	a.plugins = append(a.plugins, loadedPlugin{p.Name(), tools, events, shutdown, err})
+	a.plugins = append(a.plugins, loadedPlugin{p.Name(), p.Internal(), tools, events, shutdown, err})
 }
 
 func (a *agentRunner) RemovePlugin(name string) bool {
@@ -70,7 +71,7 @@ func (a *agentRunner) RemovePlugin(name string) bool {
 func (a *agentRunner) removePluginWithoutLock(name string) bool {
 	deleted := false
 	a.plugins = slices.DeleteFunc(a.plugins, func(p loadedPlugin) bool {
-		del := p.name == name
+		del := p.name == name && !p.internal
 		if del {
 			deleted = true
 			if p.shutdown != nil {
