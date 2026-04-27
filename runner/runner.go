@@ -51,7 +51,18 @@ func (a *agentRunner) AddPlugin(p cg.Plugin) {
 	a.pluginLock.Lock()
 	defer a.pluginLock.Unlock()
 
-	a.removePluginWithoutLock(p.Name())
+	pName := p.Name()
+
+	hasInternalWithSameName := slices.ContainsFunc(a.plugins, func(lp loadedPlugin) bool {
+		if lp.name == pName && lp.internal {
+			return true
+		}
+		return false
+	})
+	if hasInternalWithSameName {
+		return
+	}
+	a.removePluginWithoutLock(pName)
 
 	tools, events, shutdown, err := p.Load()
 	if err != nil {
