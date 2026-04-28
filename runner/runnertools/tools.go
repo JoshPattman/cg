@@ -5,30 +5,38 @@ import (
 	"github.com/JoshPattman/cg/files"
 )
 
-func Plugin(events chan<- cg.Event, fs files.FileSystem) cg.Plugin {
-	return runnerPlugin{events: events, fs: fs}
+func Plugin(fs files.FileSystem) cg.Plugin {
+	events := make(chan cg.Event)
+	return &runnerPlugin{
+		[]cg.Tool{
+			&doneTool{},
+			&reminderTool{events},
+			&listDirectoryTool{fs},
+			&readFileTool{fs, 10000},
+			&modifyFileTool{fs},
+			&deleteFileTool{fs},
+		},
+		events,
+	}
 }
 
 type runnerPlugin struct {
-	events chan<- cg.Event
-	fs     files.FileSystem
+	tools  []cg.Tool
+	events <-chan cg.Event
 }
 
-func (r runnerPlugin) Load() ([]cg.Tool, <-chan cg.Event, func(), error) {
-	return []cg.Tool{
-		&doneTool{},
-		&reminderTool{r.events},
-		&listDirectoryTool{r.fs},
-		&readFileTool{r.fs, 10000},
-		&modifyFileTool{r.fs},
-		&deleteFileTool{r.fs},
-	}, nil, nil, nil
-}
-
-func (r runnerPlugin) Name() string {
+func (r *runnerPlugin) Name() string {
 	return "internal"
 }
 
-func (r runnerPlugin) Internal() bool {
-	return true
+func (r *runnerPlugin) Removable() bool {
+	return false
+}
+
+func (r *runnerPlugin) Tools() []cg.Tool {
+	return r.tools
+}
+
+func (r *runnerPlugin) Events() <-chan cg.Event {
+	return r.events
 }

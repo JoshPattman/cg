@@ -2,6 +2,7 @@ package cg
 
 import (
 	_ "embed"
+	"iter"
 )
 
 // An event is somthing that happens that can trigger the agent to respond.
@@ -10,17 +11,15 @@ type Event interface {
 	Content() JsonObject
 }
 
-// A plugin is somthing that provides tools to the agent.
-// A plugin can be loaded all-or-nothing, so if one tool fails none will be added.
-// A plugin may also have an event channel (can be nil) that will be forwarded to the agent.
 type Plugin interface {
-	// Get the unique name of this plugin.
+	// Unique name of this loaded plugin
 	Name() string
-	// Is this plugin internal / required by the agent to function? Internal plugins cannot be removed.
-	// Internal plugins will also not be removed when calling RemoveAllPlugins. and their cleanup method will neveer be called.
-	Internal() bool
-	// Load the plugin, returning tools, a channel of events, a function to call to cleanup the plugin, and an error if the plugin failed to load.
-	Load() ([]Tool, <-chan Event, func(), error)
+	// Once added to the agent, can this plugin ever be removed again?
+	Removable() bool
+	// What tools does this plugin provide?
+	Tools() []Tool
+	// What is the channel (if any, otherwise nil) that events from this plugin come in on?
+	Events() <-chan Event
 }
 
 // A tool is somthing the agent can call to perform an action.
@@ -37,9 +36,9 @@ type ToolDef struct {
 
 // An agent can run (blocking) and respond to events with tool calls.
 type Agent interface {
-	AddPlugin(Plugin)
-	RemovePlugin(string) bool
-	RemoveAllPlugins()
+	AddPlugin(Plugin) error
+	RemovePlugin(string) error
+	AllPlugins() iter.Seq[Plugin]
 	Events() chan<- Event
 	Run() error
 	CleanStop()

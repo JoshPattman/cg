@@ -53,7 +53,7 @@ func New(model jpf.Model, memoryLoc string, fs files.FileSystem, opts ...runnerO
 		5,
 		setup.maxTokens,
 	}
-	runner.AddPlugin(runnertools.Plugin(events, fs))
+	runner.AddPlugin(runnertools.Plugin(fs))
 	return runner
 }
 

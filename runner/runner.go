@@ -2,7 +2,9 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"iter"
 	"log/slog"
 	"slices"
 	"strings"
@@ -20,6 +22,12 @@ import (
 	_ "embed"
 )
 
+var (
+	ErrPluginNotExist     = errors.New("that plugin did not exist")
+	ErrPluginAlreadyExist = errors.New("that plugin already existed")
+	ErrPluginNotRemovable = errors.New("that plugin cannot be removed")
+)
+
 type agentRunner struct {
 	logger             *slog.Logger
 	events             chan cg.Event
@@ -27,7 +35,7 @@ type agentRunner struct {
 	encoder            jpf.Encoder[encoderInput]
 	pipeline           jpf.Pipeline[encoderInput, messages.ToolCallsMessage]
 	collectionDuration time.Duration
-	plugins            []loadedPlugin
+	plugins            []cg.Plugin
 	pluginLock         *sync.Mutex
 	memoryLoc          string
 	fs                 files.FileSystem
@@ -38,77 +46,59 @@ type agentRunner struct {
 	tokenLimit         int
 }
 
-type loadedPlugin struct {
-	name     string
-	internal bool
-	tools    []cg.Tool
-	events   <-chan cg.Event
-	shutdown func()
-	err      error
-}
-
-func (a *agentRunner) AddPlugin(p cg.Plugin) {
+func (a *agentRunner) AddPlugin(p cg.Plugin) error {
 	a.pluginLock.Lock()
 	defer a.pluginLock.Unlock()
 
-	pName := p.Name()
-
-	hasInternalWithSameName := slices.ContainsFunc(a.plugins, func(lp loadedPlugin) bool {
-		if lp.name == pName && lp.internal {
-			return true
-		}
-		return false
-	})
-	if hasInternalWithSameName {
-		return
+	_, p2 := a.getPluginWithName(p.Name())
+	if p2 != nil {
+		return errors.Join(fmt.Errorf("plugin '%s'", p.Name()), ErrPluginAlreadyExist)
 	}
-	a.removePluginWithoutLock(pName)
 
-	tools, events, shutdown, err := p.Load()
-	if err != nil {
-		a.logger.Error("failed to load plugin", "plugin", p.Name(), "err", err)
-	} else {
-		a.logger.Info("loaded plugin", "plugin", p.Name(), "num_tools", len(tools))
-	}
-	a.plugins = append(a.plugins, loadedPlugin{p.Name(), p.Internal(), tools, events, shutdown, err})
+	a.plugins = append(a.plugins, p)
+	a.logger.Info("loaded plugin", "plugin", p.Name(), "num_tools", len(p.Tools()))
+	return nil
 }
 
-func (a *agentRunner) RemovePlugin(name string) bool {
+func (a *agentRunner) RemovePlugin(name string) error {
 	a.pluginLock.Lock()
 	defer a.pluginLock.Unlock()
-
 	return a.removePluginWithoutLock(name)
 }
-func (a *agentRunner) removePluginWithoutLock(name string) bool {
-	deleted := false
-	a.plugins = slices.DeleteFunc(a.plugins, func(p loadedPlugin) bool {
-		del := p.name == name && !p.internal
-		if del {
-			deleted = true
-			if p.shutdown != nil {
-				p.shutdown()
-				a.logger.Info("shutdown plugin", "plugin", name)
-			}
-		}
-		return del
-	})
-	if deleted {
-		a.logger.Info("removed plugin", "plugin", name)
+
+func (a *agentRunner) removePluginWithoutLock(name string) error {
+	i, p := a.getPluginWithName(name)
+	if i == -1 {
+		return errors.Join(fmt.Errorf("plugin '%s'", name), ErrPluginNotExist)
 	}
-	return deleted
+	if !p.Removable() {
+		return errors.Join(fmt.Errorf("plugin '%s'", name), ErrPluginNotRemovable)
+	}
+	a.plugins = slices.Delete(a.plugins, i, i+1)
+	a.logger.Info("removed plugin", "plugin", name)
+	return nil
 }
 
-func (a *agentRunner) RemoveAllPlugins() {
-	a.pluginLock.Lock()
-	defer a.pluginLock.Unlock()
+func (a *agentRunner) AllPlugins() iter.Seq[cg.Plugin] {
+	return func(yield func(cg.Plugin) bool) {
+		a.pluginLock.Lock()
+		defer a.pluginLock.Unlock()
 
-	names := make([]string, len(a.plugins))
+		for _, p := range a.plugins {
+			if !yield(p) {
+				return
+			}
+		}
+	}
+}
+
+func (a *agentRunner) getPluginWithName(name string) (int, cg.Plugin) {
 	for i, p := range a.plugins {
-		names[i] = p.name
+		if p.Name() == name {
+			return i, p
+		}
 	}
-	for _, name := range names {
-		a.removePluginWithoutLock(name)
-	}
+	return -1, nil
 }
 
 func (a *agentRunner) Events() chan<- cg.Event { return a.events }
@@ -169,7 +159,7 @@ func (a *agentRunner) eventForwarder(stop <-chan struct{}) {
 	for {
 		a.pluginLock.Lock()
 		for _, p := range a.plugins {
-			if p.events == nil {
+			if p.Events() == nil {
 				continue
 			}
 			finishedPluginEvents := false
@@ -182,7 +172,7 @@ func (a *agentRunner) eventForwarder(stop <-chan struct{}) {
 				}
 				// Recv an event.
 				select {
-				case event, ok := <-p.events:
+				case event, ok := <-p.Events():
 					// Try to send but if stop is used, stop immediately (before blocking on events chan).
 					if !ok {
 						continue
@@ -339,7 +329,6 @@ func (a *agentRunner) encoderInput() encoderInput {
 	return encoderInput{
 		a.history,
 		a.toolDefs(),
-		a.failedPlugins(),
 		time.Now(),
 		a.memoryLoc,
 		a.workingMemory(),
@@ -377,7 +366,7 @@ func (a *agentRunner) addHistory(messages ...messages.Message) {
 
 func (a *agentRunner) lookupTool(name string) cg.Tool {
 	for _, p := range a.plugins {
-		for _, t := range p.tools {
+		for _, t := range p.Tools() {
 			if t.Def().Name == name {
 				return t
 			}
@@ -393,7 +382,7 @@ func (a *agentRunner) toolExists(name string) bool {
 func (a *agentRunner) toolNames() []string {
 	names := make([]string, 0)
 	for _, p := range a.plugins {
-		for _, t := range p.tools {
+		for _, t := range p.Tools() {
 			names = append(names, t.Def().Name)
 		}
 	}
@@ -403,19 +392,9 @@ func (a *agentRunner) toolNames() []string {
 func (a *agentRunner) toolDefs() []cg.ToolDef {
 	defs := make([]cg.ToolDef, 0)
 	for _, p := range a.plugins {
-		for _, t := range p.tools {
+		for _, t := range p.Tools() {
 			defs = append(defs, t.Def())
 		}
 	}
 	return defs
-}
-
-func (a *agentRunner) failedPlugins() []failedPlugin {
-	failed := make([]failedPlugin, 0)
-	for _, p := range a.plugins {
-		if p.err != nil {
-			failed = append(failed, failedPlugin{p.name, p.err})
-		}
-	}
-	return failed
 }

@@ -14,7 +14,6 @@ import (
 type encoderInput struct {
 	Messages              []messages.Message
 	ToolDefs              []cg.ToolDef
-	FailedPlugins         []failedPlugin
 	Time                  time.Time
 	WorkingMemoryLocation string
 	WorkingMemory         string
@@ -62,8 +61,6 @@ func (e *encoder) activeState(input encoderInput) cg.JsonObject {
 	return cg.JsonObject{
 		"description":                  "This is a current state message. You will have been provided with them at previous points in the conversation too, however they have been removed for brevity. This state message is currently up-to-date and active.",
 		"active_tools":                 input.ToolDefs,
-		"failed_plugins":               input.FailedPlugins,
-		"failed_plugins_description":   "This is a list of plugins that failed to load. If a plugin failed to load, all of its tools will be unavailable. If the failed plugins list is empty, happy days!",
 		"current_datetime":             input.Time.Format(time.RFC1123),
 		"working_memory_file_location": input.WorkingMemoryLocation,
 		"working_memory":               input.WorkingMemory,
